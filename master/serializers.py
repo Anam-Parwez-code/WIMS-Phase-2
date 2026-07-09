@@ -627,14 +627,23 @@ class BranchSerializer(serializers.ModelSerializer):
     #     return super().create(validated_data)
 
     def create(self, validated_data):
-
         request = self.context["request"]
 
-        client_code = getattr(
-            request.user,
-            "client_code",
-            None
-        )
+        # 1. Pehle user se client_code nikalne ki koshish karein
+        client_code = getattr(request.user, "client_code", None)
+
+        # 2. Agar user authenticated nahi hai (None mila), toh check karein ki kya Postman se raw data me bheja hai
+        if not client_code and request:
+            client_code = request.data.get("client_code", None)
+
+        # 3. Safe Fallback: Agar phir bhi nahi mila, toh organization ke name/code ka short-form use kar lein
+        if not client_code:
+            org = validated_data.get("organization")
+            if org:
+                # Organization name ko lowercase aur space-free banakar code bana lijiye
+                client_code = re.sub(r'[^a-zA-Z0-9]', '', org.name.lower())
+            else:
+                client_code = "default_client"
 
         validated_data["is_active"] = True
 
@@ -643,15 +652,11 @@ class BranchSerializer(serializers.ModelSerializer):
             # ============================
             # CREATE BRANCH
             # ============================
-
-            branch = Branch.objects.create(
-                **validated_data
-            )
+            branch = Branch.objects.create(**validated_data)
 
             # ============================
             # GENERATE USERNAME
             # ============================
-
             clean_org_name = re.sub(
                 r'[^a-zA-Z0-9]',
                 '',
@@ -665,116 +670,65 @@ class BranchSerializer(serializers.ModelSerializer):
             )
 
             username = f"admin_{clean_org_name}_{clean_branch_name}"
-
             password = "Admin@1234"
 
             # ============================
             # DJANGO USER
             # ============================
-
-            existing_user = User.objects.filter(
-                email=username
-            ).first()
+            existing_user = User.objects.filter(email=username).first()
 
             if existing_user:
-
-                existing_user.password = make_password(
-                    password
-                )
-
+                existing_user.password = make_password(password)
                 existing_user.client_code = client_code
-
                 existing_user.is_active = True
-
                 existing_user.save()
-
             else:
-
                 User.objects.create(
-
                     email=username,
-
-                    password=make_password(
-                        password
-                    ),
-
+                    password=make_password(password),
                     client_code=client_code,
-
                     is_active=True
                 )
 
             # ============================
             # CLIENT USER
             # ============================
-
             existing_client_user = ClientUser.objects.filter(
                 client_code=client_code,
                 user_id=username
             ).first()
 
             if existing_client_user:
-
-                existing_client_user.password = make_password(
-                    password
-                )
-
+                existing_client_user.password = make_password(password)
                 existing_client_user.branch = branch
-
                 existing_client_user.role = "admin"
-
                 existing_client_user.is_admin = True
-
                 existing_client_user.is_branch_super_admin = True
-
-                existing_client_user.is_main_branch_admin = (
-                    branch.is_main_branch
-                )
-
-                existing_client_user.employee_name = (
-                    f"{branch.name} Branch Admin"
-                )
-
+                existing_client_user.is_main_branch_admin = branch.is_main_branch
+                existing_client_user.employee_name = f"{branch.name} Branch Admin"
                 existing_client_user.is_active = True
-
                 existing_client_user.save()
-
             else:
-
                 ClientUser.objects.create(
-
-                    client_code=client_code,
-
+                    client_code=client_code,  # Ab yeh kabhi null nahi hoga!
                     user_id=username,
-
-                    password=make_password(
-                        password
-                    ),
-
+                    password=make_password(password),
                     role="admin",
-
                     is_admin=True,
-
                     is_branch_super_admin=True,
-
                     is_main_branch_admin=branch.is_main_branch,
-
                     employee_name=f"{branch.name} Branch Admin",
-
                     branch=branch,
-
                     is_active=True
                 )
 
             # ============================
             # RETURN LOGIN DETAILS
             # ============================
-
             branch.generated_username = username
-
             branch.generated_password = password
 
             return branch
-
     def update(self, instance, validated_data):
         return super().update(instance, validated_data)
 

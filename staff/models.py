@@ -62,9 +62,6 @@ class Employee(models.Model):
         return self.name
 
 
-
-
-
 class UserRole(models.Model):
     name = models.CharField(max_length=100)
     description = models.TextField(blank=True, null=True)
@@ -102,16 +99,138 @@ class StaffUser(models.Model):
         return self.username
 
 
+# class Attendance(models.Model):
+#     is_active = models.BooleanField(default=True)
+#     employee = models.ForeignKey(Employee, on_delete=models.CASCADE)
+#     date = models.DateField()
+#     present = models.BooleanField(default=False)
+
+#     def __str__(self):
+#         return f"{self.employee.name} - {self.date}"
+
+from datetime import datetime
+from decimal import Decimal
+
+from django.conf import settings
+from django.db import models
+
+
 class Attendance(models.Model):
+
+    STATUS_CHOICES = [
+        ("present", "Present"),
+        ("absent", "Absent"),
+        ("half_day", "Half Day"),
+        ("on_leave", "On Leave"),
+    ]
+
     is_active = models.BooleanField(default=True)
-    employee = models.ForeignKey(Employee, on_delete=models.CASCADE)
+
+    employee = models.ForeignKey(
+        Employee,
+        on_delete=models.CASCADE,
+        related_name="attendance_records"
+    )
+
     date = models.DateField()
-    present = models.BooleanField(default=False)
+
+    # =====================================
+    # ATTENDANCE STATUS
+    # =====================================
+
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default="present"
+    )
+
+    # =====================================
+    # TIME DETAILS
+    # =====================================
+
+    time_in = models.TimeField(
+        null=True,
+        blank=True
+    )
+
+    time_out = models.TimeField(
+        null=True,
+        blank=True
+    )
+
+    # Stored in decimal hours
+    # Example:
+    # 8.50 = 8 hr 30 min
+    # 7.25 = 7 hr 15 min
+
+    total_hours = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        null=True,
+        blank=True
+    )
+
+    # =====================================
+    # REMARK
+    # =====================================
+
+    remark = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True
+    )
+
+    # =====================================
+    # MARKED BY
+    # =====================================
+
+    marked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="employee_attendance_marked"
+    )
+
+    class Meta:
+        #unique_together = ("employee", "date")
+        ordering = ["-date", "employee__name"]
+
+    def save(self, *args, **kwargs):
+
+        # =====================================
+        # CALCULATE TOTAL HOURS
+        # =====================================
+
+        if self.time_in and self.time_out:
+
+            start = datetime.combine(
+                self.date,
+                self.time_in
+            )
+
+            end = datetime.combine(
+                self.date,
+                self.time_out
+            )
+
+            diff = end - start
+
+            total_seconds = diff.total_seconds()
+
+            hours = Decimal(str(total_seconds / 3600))
+
+            self.total_hours = round(hours, 2)
+
+        else:
+
+            self.total_hours = None
+
+        super().save(*args, **kwargs)
 
     def __str__(self):
-        return f"{self.employee.name} - {self.date}"
 
-
+        return f"{self.employee.name} - {self.date} - {self.status}"
 
 
 # staff/models.py

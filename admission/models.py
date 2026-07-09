@@ -99,61 +99,6 @@ from django.db import models
 from django.core.exceptions import ValidationError
 
 
-# class CertificateTemplate(models.Model):
-
-#     course = models.ForeignKey(
-#         "course.Course",
-#         on_delete=models.CASCADE,
-#         related_name="certificate_templates",
-#         null=True,
-#         blank=True
-#     )
-
-#     template_name = models.CharField(max_length=100)
-
-#     template_path = models.CharField(
-#         max_length=500,
-#         null=True,
-#         blank=True
-#     )
-
-#     is_active = models.BooleanField(default=True)
-
-#     created_at = models.DateTimeField(
-#         auto_now_add=True,
-#         null=True,
-#         blank=True
-#     )
-
-#     def clean(self):
-
-#         existing = CertificateTemplate.objects.filter(
-#             course=self.course,
-#             template_name__iexact=self.template_name,
-#             is_active=True
-#         )
-
-#         # exclude self during update
-#         if self.pk:
-#             existing = existing.exclude(pk=self.pk)
-
-#         if existing.exists():
-#             raise ValidationError({
-#                 "template_name":
-#                     "This template already exists for this course."
-#             })
-
-#     def save(self, *args, **kwargs):
-#         self.full_clean()
-#         super().save(*args, **kwargs)
-
-#     def __str__(self):
-
-#         if self.course:
-#             return f"{self.course.course_name} - {self.template_name}"
-
-#         return self.template_name
-
 class CertificateTemplate(models.Model):
 
     course = models.ForeignKey(
@@ -330,8 +275,10 @@ class CertificateTemplate(models.Model):
         blank=True
     )
 
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True,null=True,blank=True)
+
+    updated_at = models.DateTimeField(auto_now=True,null=True,blank=True)
+    
     is_active = models.BooleanField(default=True)
 
 
@@ -447,23 +394,115 @@ class CertificateIssue(models.Model):
 
 
 
-class Attendance(models.Model):
-    is_active = models.BooleanField(default=True)
-    # Linking to your Admission model (which represents the student/candidate)
-    admission = models.ForeignKey(
-        'Admission', 
-        on_delete=models.CASCADE, 
-        related_name='attendance_records'
-    )
-    date = models.DateField()
-    present = models.BooleanField(default=False)
+# class Attendance(models.Model):
+#     is_active = models.BooleanField(default=True)
+#     # Linking to your Admission model (which represents the student/candidate)
+#     admission = models.ForeignKey(
+#         'Admission', 
+#         on_delete=models.CASCADE, 
+#         related_name='attendance_records'
+#     )
+#     date = models.DateField()
+#     present = models.BooleanField(default=False)
     
-    class Meta:
-        # Prevents duplicate entries for the same student on the same day
-        unique_together = ('admission', 'date')
+#     class Meta:
+#         # Prevents duplicate entries for the same student on the same day
+#         unique_together = ('admission', 'date')
 
-    def __str__(self):
-        status = "Present" if self.present else "Absent"
-        return f"{self.admission.candidate_name} - {self.date} ({status})"
+#     def __str__(self):
+#         status = "Present" if self.present else "Absent"
+#         return f"{self.admission.candidate_name} - {self.date} ({status})"
+
+
+
+class Attendance(models.Model):
+
+    STATUS_CHOICES = [
+        ("present", "Present"),
+        ("absent", "Absent"),
+        ("half_day", "Half Day"),
+        ("on_leave", "On Leave"),
+    ]
+
+    is_active = models.BooleanField(default=True)
+
+    admission = models.ForeignKey(
+        "Admission",
+        on_delete=models.CASCADE,
+        related_name="attendance_records"
+    )
+
+    date = models.DateField()
+
+    # NEW
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default="present"
+    )
+
+    time_in = models.TimeField(
+        null=True,
+        blank=True
+    )
+
+    time_out = models.TimeField(
+        null=True,
+        blank=True
+    )
+
+    total_hours = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        null=True,
+        blank=True
+    )
+
+    remark = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True
+    )
+
+    marked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="attendance_marked"
+    )
+
+    class Meta:
+        unique_together = ("admission", "date")
+
+    def save(self, *args, **kwargs):
+
+        if (
+            self.time_in and
+            self.time_out
+        ):
+            from datetime import datetime
+
+            start = datetime.combine(
+                self.date,
+                self.time_in
+            )
+
+            end = datetime.combine(
+                self.date,
+                self.time_out
+            )
+
+            diff = end - start
+
+            self.total_hours = round(
+                diff.total_seconds() / 3600,
+                2
+            )
+
+        else:
+            self.total_hours = None
+
+        super().save(*args, **kwargs)
 
 

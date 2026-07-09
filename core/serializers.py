@@ -240,6 +240,47 @@ class ClientLoginSerializer(serializers.Serializer):
             role_id = None
 
 
+        #########NEW#########
+
+        # organization_id = None
+        # branch_id = None
+
+        # try:
+        #     staff_user = StaffUser.objects.using(db_key).select_related(
+        #         "employee",
+        #         "employee__organization",
+        #         "employee__branch",
+        #         "role",
+        #         "admission",
+        #         "admission__organization",
+        #         "admission__branch"
+        #     ).get(
+        #         username=client_user.user_id
+        #     )
+
+        #     print("=" * 80)
+        #     print("USERNAME:", staff_user.username)
+        #     print("EMPLOYEE:", staff_user.employee)
+        #     print("EMPLOYEE ID:", staff_user.employee_id)
+
+        #     if staff_user.employee:
+        #         print("EMPLOYEE ORG:", staff_user.employee.organization_id)
+        #         print("EMPLOYEE BRANCH:", staff_user.employee.branch_id)
+
+        #     print("ADMISSION:", staff_user.admission)
+        #     print("ADMISSION ID:", staff_user.admission_id)
+
+        #     if staff_user.admission:
+        #         print("ADMISSION ORG:", staff_user.admission.organization_id)
+        #         print("ADMISSION BRANCH:", staff_user.admission.branch_id)
+
+        #     print("=" * 80)
+
+        # except StaffUser.DoesNotExist:
+        #     pass
+
+        #########NEW#########
+
         # 4. Generate login token with session_id
         
         session_id = str(uuid.uuid4())
@@ -250,12 +291,17 @@ class ClientLoginSerializer(serializers.Serializer):
         refresh["role"] = client_user.role   # ✅ ADD THIS
         refresh["role_id"] = role_id   # ✅ ADD THIS
         refresh["session_id"] = session_id
+        # refresh["organization_id"] = organization_id
+        # refresh["branch_id"] = branch_id
         refresh["organization_id"] = (
             client_user.branch.organization_id
             if client_user.branch
             else None
         )
         refresh["branch_id"] = client_user.branch_id
+
+
+
         #refresh["is_main_branch_admin"] = client_user.is_main_branch_admin
         refresh["is_main_branch_admin"] = (
             client_user.branch.is_main_branch
@@ -503,3 +549,7 @@ class ClientLoginSerializer(serializers.Serializer):
                 "courses": courses_data
             }
         }
+
+
+
+

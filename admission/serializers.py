@@ -1,3 +1,4 @@
+from datetime import datetime
 from rest_framework import serializers
 from django.db.models import Sum
 from django.db import models
@@ -118,13 +119,37 @@ class AdmissionSerializer(serializers.ModelSerializer):
 
         return value
 
-    def validate(self, data):
-        branch_id = self.context.get("branch_id")
+    # def validate(self, data):
+    #     branch_id = self.context.get("branch_id")
 
-        if branch_id:
-            branch_obj = Branch.objects.filter(id=branch_id).first()
-            if branch_obj:
-                data["branch"] = branch_obj
+    #     if branch_id:
+    #         branch_obj = Branch.objects.filter(id=branch_id).first()
+    #         if branch_obj:
+    #             data["branch"] = branch_obj
+
+    #     return data
+
+    def validate(self, data):
+
+        branch = data.get("branch") or getattr(self.instance, "branch", None)
+        organization = data.get("organization") or getattr(self.instance, "organization", None)
+
+        if organization and not organization.is_active:
+            raise serializers.ValidationError({
+                "organization": "Organization is inactive."
+            })
+
+        if branch:
+
+            if not branch.is_active:
+                raise serializers.ValidationError({
+                    "branch": "Selected branch is inactive."
+                })
+
+            if organization and branch.organization_id != organization.id:
+                raise serializers.ValidationError({
+                    "branch": "Selected branch does not belong to the selected organization."
+                })
 
         return data
 
@@ -164,11 +189,11 @@ class AdmissionSerializer(serializers.ModelSerializer):
             if user:
                 validated_data["created_by"] = user
 
-            if branch_id:
-                try:
-                    validated_data["branch"] = Branch.objects.get(id=branch_id)
-                except Branch.DoesNotExist:
-                    pass
+            # if branch_id:
+            #     try:
+            #         validated_data["branch"] = Branch.objects.get(id=branch_id)
+            #     except Branch.DoesNotExist:
+            #         pass
 
             admission = super().create(validated_data)
 
@@ -686,18 +711,42 @@ class AttendanceSerializer(serializers.ModelSerializer):
 
     courses = serializers.SerializerMethodField()
 
+    # Return formatted duration instead of Decimal
+    total_hours = serializers.SerializerMethodField()
+
+    # Return email instead of user id
+    marked_by = serializers.SerializerMethodField()
+
     class Meta:
         model = Attendance
         fields = [
-            'id', 'admission', 'candidate_name', 'admission_code', 
-            # Organization / Branch
-            'organization',
-            'branch',
+            "id",
+            "admission",
+            "candidate_name",
+            "admission_code",
 
-            # Course / Batch
-            'courses',
-            'date', 'present', 'is_active'
+            "organization",
+            "branch",
+
+            "courses",
+
+            "date",
+
+            "status",
+            "time_in",
+            "time_out",
+            "total_hours",
+            "remark",
+
+            "marked_by",
+
+            "is_active"
         ]
+
+        read_only_fields = (
+            "total_hours",
+            "marked_by",
+        )
 
     # =====================================
     # ORGANIZATION
@@ -762,6 +811,48 @@ class AttendanceSerializer(serializers.ModelSerializer):
         return list(course_map.values())
 
     # =====================================
+    # TOTAL HOURS
+    # =====================================
+
+    def get_total_hours(self, obj):
+
+        if not obj.time_in or not obj.time_out:
+            return None
+
+        start = datetime.combine(
+            obj.date,
+            obj.time_in
+        )
+
+        end = datetime.combine(
+            obj.date,
+            obj.time_out
+        )
+
+        diff = end - start
+
+        total_seconds = int(diff.total_seconds())
+
+        hours = total_seconds // 3600
+
+        minutes = (total_seconds % 3600) // 60
+
+        return f"{hours} hr {minutes} min"
+
+    # =====================================
+    # MARKED BY
+    # =====================================
+
+    def get_marked_by(self, obj):
+
+        if obj.marked_by:
+
+            return obj.marked_by.email
+
+        return None
+
+
+    # =====================================
     # VALIDATION
     # =====================================
 
@@ -791,23 +882,109 @@ class AttendanceSerializer(serializers.ModelSerializer):
                 "error":
                     "Attendance already exists for this student on this date."
             })
+        
+        status = data.get(
+            "status",
+            self.instance.status if self.instance else None
+        )
+
+        time_in = data.get(
+            "time_in",
+            self.instance.time_in if self.instance else None
+        )
+
+        time_out = data.get(
+            "time_out",
+            self.instance.time_out if self.instance else None
+        )
+
+        if status in ["absent", "on_leave"]:
+
+            data["time_in"] = None
+            data["time_out"] = None
+
+
+        if time_in and time_out:
+
+            if time_out <= time_in:
+
+                raise serializers.ValidationError({
+
+                    "time_out":
+                        "Time Out must be greater than Time In."
+
+                })   
+
+        if status == "half_day":
+
+            if not time_in:
+
+                raise serializers.ValidationError({
+
+                    "time_in":
+                        "Time In is required for Half Day."
+
+                }) 
 
         return data
 
 
-
-
-
 class AttendanceRecordSerializer(serializers.ModelSerializer):
+
+    total_hours = serializers.SerializerMethodField()
+
+    marked_by = serializers.SerializerMethodField()
 
     class Meta:
         model = Attendance
         fields = [
             "id",
             "date",
-            "present",
+
+            "status",
+
+            "time_in",
+            "time_out",
+
+            "total_hours",
+
+            "remark",
+            "marked_by",
+
             "is_active"
         ]
+
+    def get_total_hours(self, obj):
+
+        if not obj.time_in or not obj.time_out:
+            return None
+
+        start = datetime.combine(
+            obj.date,
+            obj.time_in
+        )
+
+        end = datetime.combine(
+            obj.date,
+            obj.time_out
+        )
+
+        diff = end - start
+
+        total_seconds = int(diff.total_seconds())
+
+        hours = total_seconds // 3600
+
+        minutes = (total_seconds % 3600) // 60
+
+        return f"{hours} hr {minutes} min"
+
+    def get_marked_by(self, obj):
+
+        if obj.marked_by:
+            return obj.marked_by.email
+
+        return None
 
 
 class StudentAttendanceSerializer(serializers.ModelSerializer):
@@ -837,4 +1014,3 @@ class StudentAttendanceSerializer(serializers.ModelSerializer):
         ).data
     
 
-    

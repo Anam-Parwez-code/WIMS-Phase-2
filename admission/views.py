@@ -199,10 +199,16 @@ class AdmissionAPIView(APIView):
 
     def post(self, request):
 
-        branch_id = get_branch_id(request)
+        # branch_id = get_branch_id(request)
+
+        # if not branch_id:
+        #     branch_id = request.data.get('branch', None)
+
+        branch_id = request.data.get("branch")
 
         if not branch_id:
-            branch_id = request.data.get('branch', None)
+            branch_id = get_branch_id(request)
+
 
         try:
 
@@ -249,9 +255,15 @@ class AdmissionAPIView(APIView):
             )
 
             old_email = admission.email
-            branch_id = get_branch_id(request)
+
+            # branch_id = get_branch_id(request)
+            # if not branch_id:
+            #     branch_id = request.data.get("branch")
+
+            branch_id = request.data.get("branch")
+
             if not branch_id:
-                branch_id = request.data.get("branch")
+                branch_id = get_branch_id(request)
 
             serializer = AdmissionSerializer(
                 admission,
@@ -371,6 +383,9 @@ class AdmissionAPIView(APIView):
                 status=500
             )
 
+
+
+
 class AdmissionByCourseBatchAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -452,6 +467,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 
+
 class AttendanceAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -493,6 +509,10 @@ class AttendanceAPIView(APIView):
 
             organization_id = request.query_params.get("organization")
             branch_id = request.query_params.get("branch")
+            status = request.query_params.get("status")
+
+            if status:
+                queryset = queryset.filter(status=status)
 
             if organization_id and branch_id:
 
@@ -558,12 +578,68 @@ class AttendanceAPIView(APIView):
                 "admission__candidate_name"
             )
 
+            # serializer = AttendanceSerializer(
+            #     queryset,
+            #     many=True
+            # )
+
+            # return Response(serializer.data)
+
+            # =====================================
+            # SUMMARY
+            # =====================================
+
+            working_days = queryset.count()
+
+            present_days = queryset.filter(
+                status="present"
+            ).count()
+
+            absent_days = queryset.filter(
+                status="absent"
+            ).count()
+
+            half_days = queryset.filter(
+                status="half_day"
+            ).count()
+
+            leave_days = queryset.filter(
+                status="on_leave"
+            ).count()
+
+            attendance_percentage = 0
+
+            if working_days:
+
+                attendance_percentage = round(
+                    (
+                        present_days +
+                        (half_days * 0.5)
+                    ) / working_days * 100,
+                    2
+                )
+
             serializer = AttendanceSerializer(
                 queryset,
                 many=True
             )
 
-            return Response(serializer.data)
+            return Response({
+
+                "summary": {
+
+                    "working_days": working_days,
+                    "present_days": present_days,
+                    "absent_days": absent_days,
+                    "half_days": half_days,
+                    "leave_days": leave_days,
+                    "attendance_percentage": attendance_percentage
+
+                },
+
+                "records": serializer.data
+
+            })
 
         except Exception as e:
             return Response(
@@ -595,7 +671,7 @@ class AttendanceAPIView(APIView):
                         status=400
                     )
                 
-                serializer.save()
+                serializer.save(marked_by=request.user)
                 return Response(serializer.data, status=201)
             
             return Response(serializer.errors, status=400)
@@ -608,7 +684,7 @@ class AttendanceAPIView(APIView):
             attendance = get_object_or_404(Attendance, pk=pk)
             serializer = AttendanceSerializer(attendance, data=request.data, partial=True)
             if serializer.is_valid():
-                serializer.save()
+                serializer.save(marked_by=request.user)
                 return Response(serializer.data)
             return Response(serializer.errors, status=400)
         except Exception as e:
@@ -643,11 +719,102 @@ class StudentAttendanceAPIView(APIView):
                     is_active=True
                 )
 
-                serializer = StudentAttendanceSerializer(
-                    admission
+                
+
+
+                attendance_records = admission.attendance_records.filter(
+                    is_active=True
                 )
 
-                return Response(serializer.data)
+                start_date = request.query_params.get("start_date")
+                end_date = request.query_params.get("end_date")
+
+                if start_date and end_date:
+
+                    attendance_records = attendance_records.filter(
+                        date__range=[start_date, end_date]
+                    )
+
+                elif start_date:
+
+                    attendance_records = attendance_records.filter(
+                        date__gte=start_date
+                    )
+
+                elif end_date:
+
+                    attendance_records = attendance_records.filter(
+                        date__lte=end_date
+                    )
+
+                working_days = attendance_records.count()
+
+                present_days = attendance_records.filter(
+                    status="present"
+                ).count()
+
+                absent_days = attendance_records.filter(
+                    status="absent"
+                ).count()
+
+                half_days = attendance_records.filter(
+                    status="half_day"
+                ).count()
+
+                leave_days = attendance_records.filter(
+                    status="on_leave"
+                ).count()
+
+                attendance_percentage = 0
+
+                if working_days:
+
+                    attendance_percentage = round(
+                        (
+                            present_days +
+                            (half_days * 0.5)
+                        ) / working_days * 100,
+                        2
+                    )
+
+                history = AttendanceSerializer(
+                    attendance_records.order_by("-date"),
+                    many=True
+                ).data
+
+                return Response({
+
+                    "student": {
+
+                        "id": admission.id,
+                        "admission_code": admission.admission_code,
+                        "candidate_name": admission.candidate_name,
+                        "mobile_no": admission.mobile_no,
+                        "email": admission.email
+
+                    },
+
+                    "summary": {
+
+                        "working_days": working_days,
+                        "present_days": present_days,
+                        "absent_days": absent_days,
+                        "half_days": half_days,
+                        "leave_days": leave_days,
+                        "attendance_percentage": attendance_percentage
+
+                    },
+
+                    "history": history
+
+                })
+
+
+
+            
+
+
+
 
             # ==============================
             # ALL STUDENTS WITH ATTENDANCE
@@ -659,12 +826,116 @@ class StudentAttendanceAPIView(APIView):
                 "attendance_records"
             )
 
-            serializer = StudentAttendanceSerializer(
-                queryset,
-                many=True
+
+
+            # =====================================
+            # ORGANIZATION FILTER
+            # =====================================
+
+            organization = request.query_params.get("organization")
+
+            if organization:
+
+                queryset = queryset.filter(
+                    organization_id=organization
+                )
+
+            # =====================================
+            # BRANCH FILTER
+            # =====================================
+
+            branch = request.query_params.get("branch")
+
+            if branch:
+
+                queryset = queryset.filter(
+                    branch_id=branch
+                )
+
+            # =====================================
+            # SEARCH FILTER
+            # =====================================
+
+            search = request.query_params.get("search")
+
+            if search:
+
+                queryset = queryset.filter(
+                    Q(candidate_name__icontains=search) |
+                    Q(admission_code__icontains=search) |
+                    Q(mobile_no__icontains=search)
+                )
+
+            # =====================================
+            # ORDERING
+            # =====================================
+
+            queryset = queryset.order_by(
+                "candidate_name"
             )
 
-            return Response(serializer.data)
+          
+
+            response = []
+
+            for admission in queryset:
+
+                attendance = admission.attendance_records.filter(
+                    is_active=True
+                )
+
+                working_days = attendance.count()
+
+                present_days = attendance.filter(
+                    status="present"
+                ).count()
+
+                half_days = attendance.filter(
+                    status="half_day"
+                ).count()
+
+                absent_days = attendance.filter(
+                    status="absent"
+                ).count()
+
+                leave_days = attendance.filter(
+                    status="on_leave"
+                ).count()
+
+                attendance_percentage = 0
+
+                if working_days:
+
+                    attendance_percentage = round(
+                        (
+                            present_days +
+                            (half_days * 0.5)
+                        ) / working_days * 100,
+                        2
+                    )
+
+                response.append({
+
+                    "id": admission.id,
+                    "admission_code": admission.admission_code,
+                    "candidate_name": admission.candidate_name,
+                    "mobile_no": admission.mobile_no,
+                    "email": admission.email,
+
+                    "summary": {
+
+                        "working_days": working_days,
+                        "present_days": present_days,
+                        "absent_days": absent_days,
+                        "half_days": half_days,
+                        "leave_days": leave_days,
+                        "attendance_percentage": attendance_percentage
+
+                    }
+
+                })
+
+            return Response(response)
 
         except Exception as e:
 
@@ -672,6 +943,7 @@ class StudentAttendanceAPIView(APIView):
                 {"error": str(e)},
                 status=500
             )
+
 
 class AttendanceRecordAPIView(APIView):
 
@@ -738,7 +1010,7 @@ class AttendanceRecordAPIView(APIView):
 
             if serializer.is_valid():
 
-                serializer.save()
+                serializer.save(marked_by=request.user)
 
                 return Response(
                     serializer.data,
@@ -2504,110 +2776,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework.response import Response
 from rest_framework import status
 
-# class CertificateTemplateListAPIView(APIView):
-#     permission_classes = [IsAuthenticated]
 
-#     """
-#     GET  -> List Templates
-#     POST -> Create Template
-#     """
-
-#     def get(self, request):
-
-#         course_id = request.query_params.get("course_id")
-
-#         queryset = CertificateTemplate.objects.filter(
-#             is_active=True
-#         ).select_related("course")
-
-#         # Optional course filter
-#         if course_id:
-#             queryset = queryset.filter(course_id=course_id)
-
-#         serializer = CertificateTemplateSerializer(
-#             queryset,
-#             many=True
-#         )
-
-#         return Response(serializer.data)
-
-#     def post(self, request):
-
-#         serializer = CertificateTemplateSerializer(
-#             data=request.data
-#         )
-
-#         if serializer.is_valid():
-#             serializer.save()
-
-#             return Response(
-#                 serializer.data,
-#                 status=status.HTTP_201_CREATED
-#             )
-
-#         return Response(
-#             serializer.errors,
-#             status=status.HTTP_400_BAD_REQUEST
-#         )
-
-# class CertificateTemplateDetailAPIView(APIView):
-#     permission_classes = [IsAuthenticated]
-
-#     def get_object(self, pk):
-
-#         return get_object_or_404(
-#             CertificateTemplate,
-#             pk=pk,
-#             is_active=True
-#         )
-
-#     # =========================
-#     # SINGLE GET
-#     # =========================
-#     def get(self, request, pk):
-
-#         template = self.get_object(pk)
-
-#         serializer = CertificateTemplateSerializer(template)
-
-#         return Response(serializer.data)
-
-#     # =========================
-#     # UPDATE
-#     # =========================
-#     def put(self, request, pk):
-
-#         template = self.get_object(pk)
-
-#         serializer = CertificateTemplateSerializer(
-#             template,
-#             data=request.data,
-#             partial=True
-#         )
-
-#         if serializer.is_valid():
-#             serializer.save()
-
-#             return Response(serializer.data)
-
-#         return Response(
-#             serializer.errors,
-#             status=status.HTTP_400_BAD_REQUEST
-#         )
-
-#     # =========================
-#     # DELETE
-#     # =========================
-#     def delete(self, request, pk):
-
-#         template = self.get_object(pk)
-
-#         template.is_active = False
-#         template.save()
-
-#         return Response({
-#             "message": "Certificate template deleted successfully"
-#         })
     
 
 class CertificateTemplateListAPIView(APIView):

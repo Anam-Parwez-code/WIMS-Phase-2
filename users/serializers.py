@@ -36,6 +36,51 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         # Add session_id
         token["session_id"] = str(uuid.uuid4())
 
+        # Add branch_id and organization_id claims
+        if user.role != "super_admin" and user.client_code:
+            from core.models import Client, ClientUser
+            from django.db import connections
+
+            db_key = f"client_{user.client_code}"
+
+            print("DEBUG: db_key =", db_key)
+            print("DEBUG: db_key already registered?", db_key in connections.databases)
+
+            if db_key not in connections.databases:
+                client_obj = Client.objects.using("default").filter(
+                    client_code=user.client_code
+                ).first()
+
+                print("DEBUG: client_obj found?", client_obj)
+
+                if client_obj:
+                    connections.databases[db_key] = {
+                        'ENGINE': 'django.db.backends.postgresql',
+                        'NAME': client_obj.database_name,
+                        'USER': client_obj.db_user,
+                        'PASSWORD': client_obj.db_password,
+                        'HOST': client_obj.db_host,
+                        'PORT': client_obj.db_port,
+                    }
+                    print("DEBUG: registered db config =", connections.databases[db_key])
+
+            if db_key in connections.databases:
+                try:
+                    client_user = ClientUser.objects.using(db_key).filter(
+                        user_id=user.email,
+                        is_active=True
+                    ).select_related("branch").first()
+
+                    print("DEBUG: client_user found?", client_user.id if client_user else None)
+                    print("DEBUG: client_user.branch =", client_user.branch_id if client_user else None)
+                    if client_user and client_user.branch:
+                        token["branch_id"] = client_user.branch.id
+                        token["organization_id"] = client_user.branch.organization_id
+                        print("DEBUG: branch_id SET to", token["branch_id"])
+
+                except Exception as e:
+                    print("DEBUG: EXCEPTION during ClientUser query:", repr(e))
+
         # Add login and expiry time
         login_time = datetime.now(timezone.utc)
         expiry_time = datetime.fromtimestamp(token["exp"], tz=timezone.utc)
@@ -43,10 +88,10 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         token["login_time"] = login_time.isoformat()
         token["expiry_time"] = expiry_time.isoformat()
 
-        # 🔑 Only add client info if NOT super_admin
+        # Only add client info if NOT super_admin
         if user.role != "super_admin" and user.client_code:
             from core.models import Client
-            client = Client.objects.filter(client_code=user.client_code).first()
+            client = Client.objects.using("default").filter(client_code=user.client_code).first()          
             if client:
                 token["client_id"] = str(client.id)
                 token["client_name"] = client.client_name
@@ -57,12 +102,11 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
                 )
                 token["client_logo"] = client.client_logo
                 token["is_active"] = client.is_active
-                token["user_type"] = client.user_type
-
+                token["user_type"] = getattr(client, "user_type", None)
         return token
 
     def validate(self, attrs):
-        # ✅ Step 1: Authenticate user
+        # Step 1: Authenticate user
         authenticate_kwargs = {
             self.username_field: attrs[self.username_field],
             "password": attrs["password"],
@@ -72,14 +116,11 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         if not user:
             raise serializers.ValidationError("Invalid credentials")
 
-        # ✅ Step 2: Check client selection (only for non-superadmin)
-        request = self.context.get("request")
-        selected_client = request.session.get("client_code") if request else None
+        # Step 2: Check client selection (only for non-superadmin)
+        if user.role != "super_admin" and not user.client_code:
+            raise serializers.ValidationError("This user has no client_code assigned.")
 
-        if not selected_client and user.role != "super_admin":
-            raise serializers.ValidationError("Please select a client before login.")
-
-        # ✅ Step 3: Run normal JWT validation
+        # Step 3: Run normal JWT validation
         data = super().validate(attrs)
 
         # Generate token with user (not self.user!)
@@ -87,7 +128,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
         access = token.access_token
         refresh = str(token)
 
-        # ✅ Save session in DB
+        # Save session in DB
         from .models import UserSession
         UserSession.objects.create(
             user=user,
@@ -95,7 +136,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             is_active=True
         )
 
-        # ✅ Step 4: Build response
+        # Step 4: Build response
         data.update({
             "access": str(access),
             "refresh": refresh,
@@ -124,7 +165,3 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             })
 
         return data
-    
-
-
-

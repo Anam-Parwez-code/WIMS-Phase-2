@@ -37,15 +37,17 @@ class EmployeeSerializer(serializers.ModelSerializer):
         read_only_fields = ["is_active", "employee_code"]
 
     def validate(self, data):
-        branch_id = self.context.get("branch_id")
-        if branch_id:
-            try:
-                # Assign the actual object, not just the ID
-                data["branch"] = Branch.objects.get(id=branch_id)
-            except Branch.DoesNotExist:
-                raise serializers.ValidationError({"branch": "Invalid branch ID provided in context."})
+        # branch_id = self.context.get("branch_id")
+        # if branch_id:
+        #     try:
+        #         # Assign the actual object, not just the ID
+        #         data["branch"] = Branch.objects.get(id=branch_id)
+        #     except Branch.DoesNotExist:
+        #         raise serializers.ValidationError({"branch": "Invalid branch ID provided in context."})
 
+        
         organization = data.get("organization") or getattr(self.instance, "organization", None)
+        branch = data.get("branch") or getattr(self.instance, "branch", None)
         department = data.get("department") or getattr(self.instance, "department", None)
         designation = data.get("designation") or getattr(self.instance, "designation", None)
         country = data.get("country") or getattr(self.instance, "country", None)
@@ -53,11 +55,23 @@ class EmployeeSerializer(serializers.ModelSerializer):
         city = data.get("city") or getattr(self.instance, "city", None)
         
 
+
         # Organization active check
         if organization and not organization.is_active:
             raise serializers.ValidationError({
                 "organization": "Organization is inactive."
             })
+        
+
+        # ==========================
+        # Branch belongs to Organization
+        # ==========================
+        if branch and organization:
+            if branch.organization_id != organization.id:
+                raise serializers.ValidationError({
+                    "branch": "Selected branch does not belong to the selected organization."
+                })
+            
 
         # Department / Designation validation
         if designation and department and designation.department_id != department.id:
@@ -112,6 +126,9 @@ class EmployeeSerializer(serializers.ModelSerializer):
         validated_data.pop("employee_code", None)
         return super().update(instance, validated_data)
 
+
+
+
 class UserRoleSerializer(serializers.ModelSerializer):
 
     class Meta:
@@ -138,34 +155,218 @@ class UserRoleSerializer(serializers.ModelSerializer):
 
         return value
 
+
+
+# class AttendanceSerializer(serializers.ModelSerializer):
+#     employee_name = serializers.ReadOnlyField(source='employee.name')
+#     employee_code = serializers.ReadOnlyField(source='employee.employee_code')
+
+#     class Meta:
+#         model = Attendance
+#         fields = [
+#             "id", "date", "present",
+#             "employee", "employee_name", "employee_code",
+#             "is_active"
+#         ]
+#         read_only_fields = ["is_active"]
+
+#     def validate(self, data):
+
+#         employee = data.get("employee") or getattr(self.instance, "employee", None)
+#         date = data.get("date") or getattr(self.instance, "date", None)
+
+#         if not employee:
+#             raise serializers.ValidationError({"employee": "Employee is required."})
+
+#         if not date:
+#             raise serializers.ValidationError({"date": "Date is required."})
+
+#         if not employee.is_active:
+#             raise serializers.ValidationError({
+#                 "employee": "Employee is inactive."
+#             })
+
+#         qs = Attendance.objects.filter(
+#             employee=employee,
+#             date=date,
+#             is_active=True
+#         )
+
+#         if self.instance:
+#             qs = qs.exclude(id=self.instance.id)
+
+#         if qs.exists():
+#             raise serializers.ValidationError({
+#                 "non_field_errors": "Attendance already marked for this employee on this date."
+#             })
+
+#         return data
+
+from datetime import datetime
+from rest_framework import serializers
+
 class AttendanceSerializer(serializers.ModelSerializer):
-    employee_name = serializers.ReadOnlyField(source='employee.name')
-    employee_code = serializers.ReadOnlyField(source='employee.employee_code')
+
+    employee_name = serializers.ReadOnlyField(
+        source="employee.name"
+    )
+
+    employee_code = serializers.ReadOnlyField(
+        source="employee.employee_code"
+    )
+
+    # Display formatted duration
+    total_hours = serializers.SerializerMethodField()
+
+    # Display email instead of user id
+    marked_by = serializers.SerializerMethodField()
+
+    # Display day name
+    day = serializers.SerializerMethodField()
 
     class Meta:
+
         model = Attendance
+
         fields = [
-            "id", "date", "present",
-            "employee", "employee_name", "employee_code",
+
+            "id",
+
+            "employee",
+            "employee_name",
+            "employee_code",
+
+            "date",
+            "day",
+
+            "status",
+
+            "time_in",
+            "time_out",
+
+            "total_hours",
+
+            "remark",
+
+            "marked_by",
+
             "is_active"
+
         ]
-        read_only_fields = ["is_active"]
+
+        read_only_fields = (
+            "is_active",
+            "total_hours",
+            "marked_by"
+        )
+
+    # =====================================
+    # DAY
+    # =====================================
+
+    def get_day(self, obj):
+
+        if obj.date:
+            return obj.date.strftime("%A")
+
+        return None
+
+    # =====================================
+    # TOTAL HOURS
+    # =====================================
+
+    def get_total_hours(self, obj):
+
+        if not obj.time_in or not obj.time_out:
+            return None
+
+        start = datetime.combine(
+            obj.date,
+            obj.time_in
+        )
+
+        end = datetime.combine(
+            obj.date,
+            obj.time_out
+        )
+
+        diff = end - start
+
+        total_seconds = int(diff.total_seconds())
+
+        hours = total_seconds // 3600
+
+        minutes = (total_seconds % 3600) // 60
+
+        return f"{hours} hr {minutes} min"
+
+    # =====================================
+    # MARKED BY
+    # =====================================
+
+    def get_marked_by(self, obj):
+
+        if obj.marked_by:
+            return obj.marked_by.email
+
+        return None
+
+    # =====================================
+    # VALIDATION
+    # =====================================
 
     def validate(self, data):
 
-        employee = data.get("employee") or getattr(self.instance, "employee", None)
-        date = data.get("date") or getattr(self.instance, "date", None)
+        employee = data.get(
+            "employee",
+            self.instance.employee if self.instance else None
+        )
+
+        date = data.get(
+            "date",
+            self.instance.date if self.instance else None
+        )
+
+        status = data.get(
+            "status",
+            self.instance.status if self.instance else None
+        )
+
+        time_in = data.get(
+            "time_in",
+            self.instance.time_in if self.instance else None
+        )
+
+        time_out = data.get(
+            "time_out",
+            self.instance.time_out if self.instance else None
+        )
+
+        # =====================================
+        # REQUIRED VALIDATIONS
+        # =====================================
 
         if not employee:
-            raise serializers.ValidationError({"employee": "Employee is required."})
+
+            raise serializers.ValidationError({
+                "employee": "Employee is required."
+            })
 
         if not date:
-            raise serializers.ValidationError({"date": "Date is required."})
+
+            raise serializers.ValidationError({
+                "date": "Date is required."
+            })
 
         if not employee.is_active:
+
             raise serializers.ValidationError({
                 "employee": "Employee is inactive."
             })
+
+        # =====================================
+        # DUPLICATE CHECK
+        # =====================================
 
         qs = Attendance.objects.filter(
             employee=employee,
@@ -174,17 +375,130 @@ class AttendanceSerializer(serializers.ModelSerializer):
         )
 
         if self.instance:
-            qs = qs.exclude(id=self.instance.id)
+            qs = qs.exclude(pk=self.instance.pk)
 
         if qs.exists():
+
             raise serializers.ValidationError({
-                "non_field_errors": "Attendance already marked for this employee on this date."
+                "non_field_errors":
+                    "Attendance already marked for this employee on this date."
             })
+
+        # =====================================
+        # PARSE TIME STRINGS
+        # =====================================
+
+        if isinstance(time_in, str):
+
+            try:
+                time_in = datetime.strptime(
+                    time_in,
+                    "%H:%M"
+                ).time()
+
+            except ValueError:
+                time_in = datetime.strptime(
+                    time_in,
+                    "%H:%M:%S"
+                ).time()
+
+            data["time_in"] = time_in
+
+        if isinstance(time_out, str):
+
+            try:
+                time_out = datetime.strptime(
+                    time_out,
+                    "%H:%M"
+                ).time()
+
+            except ValueError:
+                time_out = datetime.strptime(
+                    time_out,
+                    "%H:%M:%S"
+                ).time()
+
+            data["time_out"] = time_out
+
+        # =====================================
+        # ABSENT / ON LEAVE
+        # =====================================
+
+        if status in ["absent", "on_leave"]:
+
+            data["time_in"] = None
+            data["time_out"] = None
+            data["total_hours"] = None
+
+            return data
+
+        # =====================================
+        # PRESENT / HALF DAY
+        # =====================================
+
+        if status in ["present", "half_day"]:
+
+            if not data.get("time_in"):
+
+                raise serializers.ValidationError({
+
+                    "time_in":
+                    "Time In is required for Present/Half Day."
+
+                })
+
+        # =====================================
+        # TIME VALIDATION
+        # =====================================
+
+        if data.get("time_in") and data.get("time_out"):
+
+            if data["time_out"] <= data["time_in"]:
+
+                raise serializers.ValidationError({
+
+                    "time_out":
+                    "Time Out must be greater than Time In."
+
+                })
 
         return data
 
+# class BulkAttendanceSerializer(serializers.Serializer):
+#     date = serializers.DateField()
+#     records = serializers.ListField(
+#         child=serializers.DictField()
+#     )
+
+#     def validate(self, data):
+
+#         date = data["date"]
+#         records = data["records"]
+
+#         if not records:
+#             raise serializers.ValidationError("Attendance records cannot be empty.")
+
+#         employee_ids = [r.get("employee") for r in records]
+
+#         employees = Employee.objects.filter(
+#             id__in=employee_ids,
+#             is_active=True
+#         )
+
+#         if employees.count() != len(employee_ids):
+#             raise serializers.ValidationError(
+#                 "One or more employees are invalid or inactive."
+#             )
+
+#         return data
+
+
+from datetime import datetime
+
 class BulkAttendanceSerializer(serializers.Serializer):
+
     date = serializers.DateField()
+
     records = serializers.ListField(
         child=serializers.DictField()
     )
@@ -194,10 +508,38 @@ class BulkAttendanceSerializer(serializers.Serializer):
         date = data["date"]
         records = data["records"]
 
-        if not records:
-            raise serializers.ValidationError("Attendance records cannot be empty.")
+        # =====================================
+        # RECORDS EMPTY
+        # =====================================
 
-        employee_ids = [r.get("employee") for r in records]
+        if not records:
+
+            raise serializers.ValidationError(
+                "Attendance records cannot be empty."
+            )
+
+        # =====================================
+        # EMPLOYEE IDS
+        # =====================================
+
+        employee_ids = [
+            record.get("employee")
+            for record in records
+        ]
+
+        # =====================================
+        # DUPLICATE EMPLOYEE IN REQUEST
+        # =====================================
+
+        if len(employee_ids) != len(set(employee_ids)):
+
+            raise serializers.ValidationError(
+                "Duplicate employees found in attendance records."
+            )
+
+        # =====================================
+        # VALID EMPLOYEES
+        # =====================================
 
         employees = Employee.objects.filter(
             id__in=employee_ids,
@@ -205,11 +547,128 @@ class BulkAttendanceSerializer(serializers.Serializer):
         )
 
         if employees.count() != len(employee_ids):
+
             raise serializers.ValidationError(
                 "One or more employees are invalid or inactive."
             )
 
+        # =====================================
+        # ATTENDANCE ALREADY EXISTS
+        # =====================================
+
+        existing = Attendance.objects.filter(
+            employee_id__in=employee_ids,
+            date=date,
+            is_active=True
+        ).values_list(
+            "employee_id",
+            flat=True
+        )
+
+        if existing:
+
+            raise serializers.ValidationError(
+                f"Attendance already exists for employee(s): {list(existing)}"
+            )
+
+        # =====================================
+        # VALIDATE EACH RECORD
+        # =====================================
+
+        for record in records:
+
+            status = record.get(
+                "status",
+                "present"
+            )
+
+            time_in = record.get("time_in")
+
+            time_out = record.get("time_out")
+
+            # -----------------------------
+            # Convert string -> time object
+            # -----------------------------
+
+            if isinstance(time_in, str):
+
+                try:
+
+                    time_in = datetime.strptime(
+                        time_in,
+                        "%H:%M"
+                    ).time()
+
+                except ValueError:
+
+                    time_in = datetime.strptime(
+                        time_in,
+                        "%H:%M:%S"
+                    ).time()
+
+                record["time_in"] = time_in
+
+            if isinstance(time_out, str):
+
+                try:
+
+                    time_out = datetime.strptime(
+                        time_out,
+                        "%H:%M"
+                    ).time()
+
+                except ValueError:
+
+                    time_out = datetime.strptime(
+                        time_out,
+                        "%H:%M:%S"
+                    ).time()
+
+                record["time_out"] = time_out
+
+            # -----------------------------
+            # Absent / Leave
+            # -----------------------------
+
+            if status in ["absent", "on_leave"]:
+
+                record["time_in"] = None
+                record["time_out"] = None
+
+                continue
+
+            # -----------------------------
+            # Present / Half Day
+            # -----------------------------
+
+            if status in ["present", "half_day"]:
+
+                if not record.get("time_in"):
+
+                    raise serializers.ValidationError(
+                        {
+                            "time_in":
+                            f"Time In is required for Employee ID {record.get('employee')}."
+                        }
+                    )
+
+            # -----------------------------
+            # Time Validation
+            # -----------------------------
+
+            if record.get("time_in") and record.get("time_out"):
+
+                if record["time_out"] <= record["time_in"]:
+
+                    raise serializers.ValidationError(
+                        {
+                            "time_out":
+                            f"Time Out must be greater than Time In for Employee ID {record.get('employee')}."
+                        }
+                    )
+
         return data
+
 
 class RoleMembersListSerializer(serializers.ModelSerializer):
     staff_users = serializers.SerializerMethodField()

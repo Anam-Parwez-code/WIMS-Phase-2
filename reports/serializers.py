@@ -46,3 +46,4 @@ class CourseTrackerReportSerializer(serializers.ModelSerializer):
             'trainer_name', 'batch_name', 'course_name'
         ]
 
+

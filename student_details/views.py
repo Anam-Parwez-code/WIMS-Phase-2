@@ -568,6 +568,7 @@ class EnquiryFollowUpListAPIView(APIView):
         })
 
 # ------------------ Registration -------------------
+
 class RegistrationAPIView(APIView):
     #permission_classes = [IsSuperAdminOrClientAdmin]
     permission_classes = [IsAuthenticated]
@@ -739,6 +740,8 @@ class RegistrationAPIView(APIView):
         except Exception as e:
             log_error(request, "RegistrationAPIView.delete", str(e), e)
             return Response({"error": "An error occurred"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 
 class RegistrationBulkImportView(APIView):
     #permission_classes = [IsSuperAdminOrClientAdmin]

@@ -312,6 +312,8 @@ class TopicSerializer(serializers.ModelSerializer):
 
         return data
 
+
+
 class CourseTrackerSerializer(serializers.ModelSerializer):
     # Custom fields for readable names
     organization_name = serializers.ReadOnlyField(source='organization.name')

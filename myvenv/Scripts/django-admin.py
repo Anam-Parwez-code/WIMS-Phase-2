@@ -1,4 +1,4 @@
-#!C:\Users\buddi\Downloads\wims_backend_backup_server\wims_backend_backup\myvenv\Scripts\python.exe
+#!C:\Users\saman\Downloads\wims-18-Phase2\wims_backend_backup_server\wims_backend_backup\myvenv\Scripts\python.exe
 # When the django-admin.py deprecation ends, remove this script.
 import warnings
 

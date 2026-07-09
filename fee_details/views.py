@@ -124,49 +124,45 @@ def allocate_payment_to_installments(fee_generation, amount, payment_data=None):
 from master.models import Branch
 
 
-# def can_access_fee_branch(
-#     request,
-#     fee_branch_id,
-#     fee_org_id
-# ):
-#     user = request.user
+def resolve_org_branch_scope(request, organization_id=None, branch_id=None):
+    """
+    List APIs ke liye: agar branch explicitly diya hai to validate karo,
+    warna token se auto-scope karo (regular admin -> apni branch, main admin -> puri org).
+    """
+    user = request.user
 
-#     # =================================
-#     # CLIENT ADMIN
-#     # =================================
+    if branch_id:
+        allowed, message = can_access_fee_branch(request, branch_id)
+        if not allowed:
+            return organization_id, branch_id, Response(
+                {"error": "Unauthorized", "reason": message},
+                status=403
+            )
+        return organization_id, branch_id, None
 
-#     if getattr(user, "role", None) == "client_admin":
-#         return True
+    if getattr(user, "role", None) == "client_admin":
+        return organization_id, branch_id, None
 
-#     branch_id = get_branch_id(request)
+    token_branch_id = get_branch_id(request)
 
-#     if not branch_id:
-#         return False
+    if not token_branch_id:
+        return organization_id, branch_id, None
 
-#     user_branch = Branch.objects.filter(
-#         id=branch_id,
-#         is_active=True
-#     ).first()
+    user_branch = Branch.objects.filter(
+        id=token_branch_id,
+        is_active=True
+    ).first()
 
-#     if not user_branch:
-#         return False
+    if not user_branch:
+        return organization_id, branch_id, None
 
-#     # =================================
-#     # MAIN BRANCH
-#     # =================================
+    if user_branch.is_main_branch:
+        if not organization_id:
+            organization_id = user_branch.organization_id
+    else:
+        branch_id = token_branch_id
 
-#     if user_branch.is_main_branch:
-
-#         return (
-#             user_branch.organization_id
-#             == fee_org_id
-#         )
-
-#     # =================================
-#     # NORMAL USERS
-#     # =================================
-
-#     return int(branch_id) == int(fee_branch_id)
+    return organization_id, branch_id, None
 
 
 from master.models import Branch
@@ -358,6 +354,8 @@ def can_access_fee_branch(request, fee_branch_id):
         f"Main Branch={user_branch.is_main_branch}"
     )
 
+
+
 class DuesListAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -383,6 +381,12 @@ class DuesListAPIView(APIView):
         branch_id = request.GET.get(
             "branch"
         )
+
+        organization_id, branch_id, error = resolve_org_branch_scope(
+            request, organization_id, branch_id
+        )
+        if error:
+            return error
 
         queryset = FeeInstallment.objects.select_related(
             "fee_generation",
@@ -519,6 +523,12 @@ class DuesExportAPIView(APIView):
         branch_id = request.GET.get(
             "branch"
         )
+
+        organization_id, branch_id, error = resolve_org_branch_scope(
+            request, organization_id, branch_id
+        )
+        if error:
+            return error
 
         queryset = FeeInstallment.objects.select_related(
             "fee_generation",
@@ -891,20 +901,6 @@ class FeeDepositInsertUpdateAPIView(APIView):
             print("FEE ORG:", fee_gen.admission.organization_id)
             print("FEE BRANCH:", fee_gen.admission.branch_id)
 
-            # 🔐 Branch check
-            # if branch_id and fee_gen.branch_id != int(branch_id):
-            #     return Response({"error": "Unauthorized"}, status=403)
-
-            # if not can_access_fee_branch(
-            #     request,
-            #     fee_gen.branch_id,
-            #     fee_gen.organization_id
-            # ):
-            #     return Response(
-            #         {"error": "Unauthorized"},
-            #         status=403
-            #     )
-
             print("FEE GEN ID:", fee_gen.id)
             print("FEE GEN BRANCH FIELD:", getattr(fee_gen, "branch_id", None))
             print("ADMISSION BRANCH:", fee_gen.admission.branch_id)
@@ -917,7 +913,7 @@ class FeeDepositInsertUpdateAPIView(APIView):
 
             print("FEE ACCESS:", message)
 
-           
+
 
             if not allowed:
                 return Response(
@@ -968,7 +964,7 @@ class FeeDepositInsertUpdateAPIView(APIView):
                 "installment_paid": float(installment.total_paid)
             })
 
-        
+
 
         # =========================
         # ➕ CREATE CASE
@@ -1008,15 +1004,6 @@ class FeeDepositInsertUpdateAPIView(APIView):
 
         print("FEE ACCESS:", message)
 
-        # 🔐 Branch check
-        # if branch_id and fee_gen.branch_id != int(branch_id):
-        #     return Response({"error": "Unauthorized"}, status=403)
-
-        # allowed, message = can_access_fee_branch(
-        #     request,
-        #     fee_gen.branch_id
-        # )
-
         if not allowed:
             return Response(
                 {
@@ -1025,8 +1012,6 @@ class FeeDepositInsertUpdateAPIView(APIView):
                 },
                 status=403
             )
-
-
 
 
 
@@ -1104,7 +1089,6 @@ class FeeDepositInsertUpdateAPIView(APIView):
         }, status=201)
 
 
-
 class FeeDepositUpdateAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -1123,20 +1107,6 @@ class FeeDepositUpdateAPIView(APIView):
 
         installment = deposit.installment
         fee_gen = installment.fee_generation
-
-        # 🔐 Branch check
-        # if branch_id and fee_gen.branch_id != int(branch_id):
-        #     return Response({"error": "Unauthorized"}, status=403)
-
-        # if not can_access_fee_branch(
-        #     request,
-        #     fee_gen.branch_id,
-        #     fee_gen.organization_id
-        # ):
-        #     return Response(
-        #         {"error": "Unauthorized"},
-        #         status=403
-        #     )
 
         allowed, message = can_access_fee_branch(
             request,
@@ -1277,8 +1247,6 @@ class GetDepositsByStudentAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, student_id):
-        
-
 
         user = request.user
         branch_id = get_branch_id(request)
@@ -1346,7 +1314,9 @@ class GetDepositsByStudentAPIView(APIView):
             "fees": fees_data
         }, status=status.HTTP_200_OK)
 
+
 class GetDepositsByFeeAPIView(APIView):
+    permission_classes = [IsAuthenticated]
 
     def get(self, request, fee_id):
 
@@ -1356,9 +1326,18 @@ class GetDepositsByFeeAPIView(APIView):
         fee = get_object_or_404(
             FeeGeneration,
             id=fee_id,
-            # branch_id=branch_id if branch_id else None,
             is_active=True
         )
+
+        allowed, message = can_access_fee_branch(
+            request, fee.branch_id
+        )
+
+        if not allowed:
+            return Response(
+                {"error": "Unauthorized", "reason": message},
+                status=403
+            )
 
         # Client Admin case
         if not branch_id:
@@ -1397,12 +1376,11 @@ class GetDepositsByFeeAPIView(APIView):
             "deposits": deposits_data
         }, status=status.HTTP_200_OK)
 
+
 class GenerateReceiptAPIView(APIView):
+    permission_classes = [IsAuthenticated]
 
     def get(self, request, deposit_id):
-
-        user = request.user
-        branch_id = get_branch_id(request)
 
         deposit = get_object_or_404(
             FeeDeposit.objects.select_related(
@@ -1411,14 +1389,22 @@ class GenerateReceiptAPIView(APIView):
                 "installment__fee_generation__admission"
             ),
             id=deposit_id,
-            is_active=True,
-            installment__fee_generation__branch=branch_id
+            is_active=True
         )
 
         installment = deposit.installment
         fee = installment.fee_generation
         student = fee.admission
 
+        allowed, message = can_access_fee_branch(
+            request, fee.branch_id
+        )
+
+        if not allowed:
+            return Response(
+                {"error": "Unauthorized", "reason": message},
+                status=403
+            )
         buffer = BytesIO()
         doc = SimpleDocTemplate(
             buffer,
@@ -1510,10 +1496,57 @@ class FeeGenerationInsertUpdateAPIView(APIView):
         admission_id = request.data.get("admission")
         fee_type = request.data.get("fee_type", "Installment")
 
-        admission = get_object_or_404(Admission, id=admission_id, is_active=True)
-        #course = admission.courses.first()
+        # ==========================================
+        # UPDATE ACCESS CHECK
+        # ==========================================
+        if fee_id:
 
-        
+            existing_fee = get_object_or_404(
+                FeeGeneration.objects.select_related(
+                    "admission"
+                ),
+                id=fee_id,
+                is_active=True
+            )
+
+            allowed, message = can_access_fee_branch(
+                request,
+                existing_fee.admission.branch_id
+            )
+
+            if not allowed:
+                return Response(
+                    {
+                        "error": "Unauthorized",
+                        "reason": message
+                    },
+                    status=403
+                )
+
+
+
+        admission = get_object_or_404(Admission, id=admission_id, is_active=True)
+
+        # =========================
+        # BRANCH ACCESS CHECK
+        # =========================
+
+        allowed, message = can_access_fee_branch(
+            request,
+            admission.branch_id
+        )
+
+        if not allowed:
+            return Response(
+                {
+                    "error": "Unauthorized",
+                    "reason": message
+                },
+                status=403
+            )
+
+
+
         # ====================================
         # FETCH COURSE FROM MAPPING TABLE
         # ====================================
@@ -1677,32 +1710,6 @@ class FeeGenerationInsertUpdateAPIView(APIView):
             )
 
         # =========================
-        # ADVANCE PAYMENT
-        # =========================
-        # if created and advance_amount > 0:
-        #     first_inst = fee.installments.order_by("installment_no").first()
-
-        #     if first_inst:
-        #         FeeDeposit.objects.create(
-        #             installment=first_inst,
-        #             payment_date=generated_date,
-        #             payment_mode_id=request.data.get("payment_mode"),
-        #             paid_amount=advance_amount,
-
-        #             # ✅ IMPORTANT
-        #             is_active=True,
-
-        #             ledger=request.data.get("ledger"),
-        #             reference_no=request.data.get("reference_no"),
-        #             reference_date=request.data.get("reference_date"),
-        #             bank_name=request.data.get("bank_name")
-        #         )
-
-        #         first_inst.total_paid += advance_amount
-        #         first_inst.is_paid = first_inst.total_paid >= first_inst.amount
-        #         first_inst.save()
-
-        # =========================
         # ADVANCE PAYMENT AUTO ALLOCATION
         # =========================
 
@@ -1721,9 +1728,6 @@ class FeeGenerationInsertUpdateAPIView(APIView):
                     "bank_name": request.data.get("bank_name"),
                 }
             )
-
-
-
 
 
 
@@ -1747,44 +1751,30 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 
+
 class FeeGenerationListAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        queryset = FeeGeneration.objects.filter(is_active=True).select_related(
-            "admission"
-        ).prefetch_related(
-            "monthly_details",
-            "installments__deposits"
-        )
 
-        # =========================
-        # ORGANIZATION FILTER
-        # =========================
+        organization_id = request.query_params.get("organization")
+        branch_id = request.query_params.get("branch")
 
-        organization_id = request.query_params.get(
-            "organization"
+        organization_id, branch_id, error = resolve_org_branch_scope(
+            request, organization_id, branch_id
         )
+        if error:
+            return error
+
+        queryset = FeeGeneration.objects.select_related(
+            "admission", "course", "payment_mode"
+        ).filter(is_active=True)
 
         if organization_id:
-
-            queryset = queryset.filter(
-                admission__organization_id=organization_id
-            )
-
-        # =========================
-        # BRANCH FILTER
-        # =========================
-
-        branch_id = request.query_params.get(
-            "branch"
-        )
+            queryset = queryset.filter(admission__organization_id=organization_id)
 
         if branch_id:
-
-            queryset = queryset.filter(
-                admission__branch_id=branch_id
-            )
+            queryset = queryset.filter(admission__branch_id=branch_id)
 
         # =========================
         # 🔍 FILTERS
@@ -1795,7 +1785,7 @@ class FeeGenerationListAPIView(APIView):
         start_date = request.query_params.get("start_date")
         end_date = request.query_params.get("end_date")
 
-        # ✅ NEW: YEAR FILTER
+        # ✅ YEAR FILTER
         from_year = request.query_params.get("from_year")
         to_year = request.query_params.get("to_year")
 
@@ -1964,189 +1954,6 @@ class FeeGenerationListAPIView(APIView):
             data.append(item)
 
         return Response(data)
-
-
-# class FeeGenerationUpdateAPIView(APIView):
-#     permission_classes = [IsAuthenticated]
-
-#     @transaction.atomic
-#     def put(self, request, fee_id):
-#         user = request.user
-
-#         fee = get_object_or_404(
-#             FeeGeneration,
-#             id=fee_id,
-#             is_active=True
-#         )
-
-#         admission = fee.admission
-#         course = fee.course
-
-#         if not course:
-#             return Response({"error": "Course not linked"}, status=400)
-
-#         fee_type = request.data.get("fee_type", fee.fee_type)
-
-#         # COMMON INPUTS
-#         extra_amount = Decimal(str(request.data.get("extra_amount", fee.extra_amount)))
-#         discount = Decimal(str(request.data.get("discount", fee.discount)))
-#         kit_charges = Decimal(str(request.data.get("kit_charges", fee.kit_charges)))
-#         advance_amount = Decimal(str(request.data.get("advance_amount", fee.advance_amount)))
-
-#         generated_date_str = request.data.get("generated_date", str(fee.generated_date))
-#         generated_date = datetime.strptime(generated_date_str, "%Y-%m-%d").date()
-
-#         # =========================
-#         # 🔵 MONTHLY LOGIC (FIXED)
-#         # =========================
-#         if fee_type == "Monthly":
-#             monthly_fee = Decimal(str(request.data.get("monthly_fee", fee.course_fee)))
-#             months = request.data.get("months", [])
-
-#             if not months or not isinstance(months, list):
-#                 return Response({"error": "Valid months list required"}, status=400)
-
-#             months_count = len(months)
-
-#             billing_before_gst = monthly_fee * months_count
-
-#             # If you truly want no GST for monthly → keep 0
-#             gst_percentage = Decimal("0")
-#             gst_amount = Decimal("0")
-
-#             total_fee = billing_before_gst
-#             balance_amount = total_fee - advance_amount
-
-#             installment_count = months_count
-
-#         # =========================
-#         # 🟢 INSTALLMENT LOGIC
-#         # =========================
-#         else:
-#             course_fee = Decimal(str(request.data.get("course_fee", fee.course_fee)))
-#             gst_percentage = Decimal(str(course.gst_percentage))
-
-#             installment_count = int(
-#                 request.data.get("installment_count", fee.installment_count or 1)
-#             )
-
-#             billing_before_gst = (course_fee + extra_amount) - discount
-#             gst_amount = (billing_before_gst * gst_percentage) / 100
-
-#             total_fee = billing_before_gst + gst_amount + kit_charges
-#             balance_amount = total_fee - advance_amount
-
-#         # =========================
-#         # UPDATE MAIN RECORD
-#         # =========================
-#         fee.generated_date = generated_date
-#         fee.fee_type = fee_type
-#         fee.course_fee = monthly_fee if fee_type == "Monthly" else course_fee
-#         fee.extra_amount = extra_amount
-#         fee.discount = discount
-#         fee.billing_before_gst = billing_before_gst
-#         fee.gst_percentage = gst_percentage
-#         fee.gst_amount = gst_amount
-#         fee.kit_charges = kit_charges
-#         fee.total_fee = total_fee
-#         fee.advance_amount = advance_amount
-#         fee.balance_amount = balance_amount
-#         fee.installment_count = installment_count
-#         fee.payment_mode_id = request.data.get("payment_mode", fee.payment_mode_id)
-#         fee.ledger = request.data.get("ledger", fee.ledger)
-#         fee.reference_no = request.data.get("reference_no", fee.reference_no)
-#         fee.reference_date = request.data.get("reference_date", fee.reference_date)
-#         fee.bank_name = request.data.get("bank_name", fee.bank_name)
-#         fee.updated_by = user
-
-#         fee.save()
-
-#         # =========================
-#         # 🔥 MONTHLY DETAILS UPDATE (MISSING BEFORE)
-#         # =========================
-#         if fee_type == "Monthly":
-
-#             # 🚨 Prevent editing if payments exist (future safe)
-#             has_payments = fee.installments.filter(deposits__isnull=False).exists()
-#             if has_payments:
-#                 return Response({
-#                     "error": "Cannot modify monthly structure after payments"
-#                 }, status=400)
-
-#             # if has_payments:
-
-#             #     # prevent changing months count
-#             #     existing_months = fee.monthly_details.count()
-#             #     new_months = len(months)
-
-#             #     if existing_months != new_months:
-#             #         return Response({
-#             #             "error": "Cannot change months count after payments"
-#             #         }, status=400)
-
-#             # Reset months
-#             fee.monthly_details.all().delete()
-
-#             for m in months:
-#                 FeeMonthlyDetail.objects.create(
-#                     fee_generation=fee,
-#                     month=m.get("month"),
-#                     year=m.get("year"),
-#                     due_date=m.get("due_date")
-#                 )
-
-#             # ❗ IMPORTANT: Remove installments if switching from installment → monthly
-#             fee.installments.all().delete()
-
-#         # =========================
-#         # 🟢 INSTALLMENT RE-GENERATION
-#         # =========================
-#         if fee_type == "Installment":
-
-#             paid_installments = fee.installments.filter(deposits__isnull=False).distinct()
-
-#             total_paid = sum(
-#                 inst.deposits.aggregate(Sum('paid_amount'))['paid_amount__sum'] or 0
-#                 for inst in paid_installments
-#             )
-
-#             remaining_to_distribute = total_fee - total_paid
-
-#             # delete unpaid installments
-#             fee.installments.filter(deposits__isnull=True).delete()
-
-#             current_paid_count = paid_installments.count()
-#             new_needed = installment_count - current_paid_count
-
-#             if new_needed > 0:
-#                 inst_amt = (remaining_to_distribute / new_needed).quantize(
-#                     Decimal("0.01"),
-#                     rounding=ROUND_HALF_UP
-#                 )
-
-#                 installment_payloads = request.data.get("installments", [])
-
-#                 for inst_data in installment_payloads:
-
-#                     FeeInstallment.objects.create(
-#                         fee_generation=fee,
-#                         installment_no=inst_data.get("installment_no"),
-#                         amount=Decimal(str(inst_data.get("amount"))),
-#                         due_date=inst_data.get("due_date")
-#                     )
-
-#             # ❗ IMPORTANT: Remove monthly data if switching → installment
-#             fee.monthly_details.all().delete()
-
-#         return Response({
-#             "message": "Fee updated successfully",
-#             "fee_id": fee.id,
-#             "fee_type": fee.fee_type,
-#             "total_fee": float(total_fee),
-#             "balance_due": float(balance_amount),
-#             "installments": fee.installments.count() if fee_type == "Installment" else 0,
-#             "months_count": fee.monthly_details.count() if fee_type == "Monthly" else 0
-#         })
 
 
 class FeeGenerationUpdateAPIView(APIView):
@@ -2606,10 +2413,6 @@ class FeeGenerationDeleteAPIView(APIView):
                 "error": "Cannot delete fee. Payments already recorded."
             }, status=400)
 
-        # 🔥 (Future-safe) Monthly payments check placeholder
-        # if fee.monthly_payments.exists():  # if you add later
-        #     return Response({"error": "Monthly payments exist"}, status=400)
-
         # ✅ Delete related data FIRST
         fee.installments.all().delete()
         fee.monthly_details.all().delete()   # 🔥 NEW FIX
@@ -2692,7 +2495,6 @@ class FeeGenerationInstallmentsAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, fee_id):
-        branch_id = get_branch_id(request)
 
         fee = get_object_or_404(
             FeeGeneration.objects.select_related("admission"),
@@ -2700,9 +2502,15 @@ class FeeGenerationInstallmentsAPIView(APIView):
             is_active=True
         )
 
-        if branch_id and fee.branch_id != int(branch_id):
-            return Response({"error": "Unauthorized branch access"}, status=403)
+        allowed, message = can_access_fee_branch(
+            request, fee.branch_id
+        )
 
+        if not allowed:
+            return Response(
+                {"error": "Unauthorized", "reason": message},
+                status=403
+            )
         installments = FeeInstallment.objects.filter(
             fee_generation=fee,
             is_active=True
@@ -2775,7 +2583,6 @@ class FeeGenerationInstallmentWithDepositsAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, fee_id):
-        branch_id = get_branch_id(request)
 
         fee = get_object_or_404(
             FeeGeneration.objects.select_related("admission"),
@@ -2783,9 +2590,23 @@ class FeeGenerationInstallmentWithDepositsAPIView(APIView):
             is_active=True
         )
 
-        # 🔐 Branch check
-        if branch_id and fee.branch_id != int(branch_id):
-            return Response({"error": "Unauthorized"}, status=403)
+        # =========================
+        # BRANCH ACCESS CHECK
+        # =========================
+
+        allowed, message = can_access_fee_branch(
+            request,
+            fee.admission.branch_id
+        )
+
+        if not allowed:
+            return Response(
+                {
+                    "error": "Unauthorized",
+                    "reason": message
+                },
+                status=403
+            )
 
 
 

@@ -1,3 +1,4 @@
+from datetime import datetime
 from rest_framework import viewsets
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -23,6 +24,7 @@ from django.contrib.auth import get_user_model
 from django.db.models import Q
 
 # EMPLOYEE
+
 class EmployeeListCreateAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -45,6 +47,8 @@ class EmployeeListCreateAPIView(APIView):
                 status=status.HTTP_201_CREATED
             )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
 
 class EmployeeDetailAPIView(APIView):
     permission_classes = [IsAuthenticated]
@@ -330,9 +334,7 @@ class AttendanceListCreateAPIView(APIView):
         # ORGANIZATION FILTER
         # =====================================
 
-        organization_id = request.query_params.get(
-            "organization"
-        )
+        organization_id = request.query_params.get("organization")
 
         if organization_id:
 
@@ -344,9 +346,7 @@ class AttendanceListCreateAPIView(APIView):
         # BRANCH FILTER
         # =====================================
 
-        branch_id = request.query_params.get(
-            "branch"
-        )
+        branch_id = request.query_params.get("branch")
 
         if branch_id:
 
@@ -354,12 +354,115 @@ class AttendanceListCreateAPIView(APIView):
                 employee__branch_id=branch_id
             )
 
+        # =====================================
+        # EMPLOYEE SEARCH
+        # =====================================
+
+        search = request.query_params.get("search")
+
+        if search:
+
+            records = records.filter(
+                Q(employee__name__icontains=search) |
+                Q(employee__employee_code__icontains=search)
+            )
+
+        # =====================================
+        # DATE FILTER
+        # =====================================
+
+        start_date = request.query_params.get("start_date")
+        end_date = request.query_params.get("end_date")
+
+        if start_date and end_date:
+
+            records = records.filter(
+                date__range=[start_date, end_date]
+            )
+
+        elif start_date:
+
+            records = records.filter(
+                date__gte=start_date
+            )
+
+        elif end_date:
+
+            records = records.filter(
+                date__lte=end_date
+            )
+
+        # =====================================
+        # ORDERING
+        # =====================================
+
+        records = records.order_by(
+            "-date",
+            "employee__name"
+        )
+
+
+        # =====================================
+        # SUMMARY
+        # =====================================
+
+        working_days = records.count()
+
+        present_days = records.filter(
+            status="present"
+        ).count()
+
+        absent_days = records.filter(
+            status="absent"
+        ).count()
+
+        half_days = records.filter(
+            status="half_day"
+        ).count()
+
+        leave_days = records.filter(
+            status="on_leave"
+        ).count()
+
+        attendance_percentage = 0
+
+        if working_days:
+
+            attendance_percentage = round(
+                (
+                    present_days +
+                    (half_days * 0.5)
+                ) / working_days * 100,
+                2
+            )
+
         serializer = AttendanceSerializer(
             records,
             many=True
         )
 
-        return Response(serializer.data)
+        return Response({
+
+            "summary": {
+
+                "working_days": working_days,
+
+                "present_days": present_days,
+
+                "absent_days": absent_days,
+
+                "half_days": half_days,
+
+                "leave_days": leave_days,
+
+                "attendance_percentage": attendance_percentage
+
+            },
+
+            "records": serializer.data
+
+        })
+
 
     def post(self, request):
         # BULK attendance
@@ -374,19 +477,58 @@ class AttendanceListCreateAPIView(APIView):
             created = []
 
             for record in serializer.validated_data["records"]:
+
                 emp_id = record["employee"]
-                present = record.get("present", False)
 
-                employee = get_object_or_404(Employee, id=emp_id, is_active=True)
+                employee = get_object_or_404(
+                    Employee,
+                    id=emp_id,
+                    is_active=True
+                )
 
-                attendance, _ = Attendance.objects.update_or_create(
+                time_in = record.get("time_in")
+                time_out = record.get("time_out")
+
+                if isinstance(time_in, str):
+                    time_in = datetime.strptime(
+                        time_in,
+                        "%H:%M"
+                    ).time()
+
+                if isinstance(time_out, str):
+                    time_out = datetime.strptime(
+                        time_out,
+                        "%H:%M"
+                    ).time()
+
+                attendance = Attendance.objects.filter(
                     employee=employee,
                     date=date,
-                    defaults={
-                        "present": present,
-                        "is_active": True
-                    }
-                )
+                    is_active=True
+                ).first()
+
+                if attendance:
+
+                    attendance.status = record.get("status")
+                    attendance.time_in = time_in
+                    attendance.time_out = time_out
+                    attendance.remark = record.get("remark")
+                    attendance.marked_by = request.user
+                    attendance.save()
+
+                else:
+
+                    attendance = Attendance.objects.create(
+                        employee=employee,
+                        date=date,
+                        status=record.get("status"),
+                        time_in=time_in,
+                        time_out=time_out,
+                        remark=record.get("remark"),
+                        marked_by=request.user,
+                        is_active=True
+                    )
+
                 created.append(attendance)
 
             return Response(
@@ -400,12 +542,13 @@ class AttendanceListCreateAPIView(APIView):
             context={"request": request}
         )
         serializer.is_valid(raise_exception=True)
-        attendance = serializer.save()
+        attendance = serializer.save(marked_by=request.user)
 
         return Response(
             AttendanceSerializer(attendance).data,
             status=status.HTTP_201_CREATED
         )
+
 
 class AttendanceDetailAPIView(APIView):
     permission_classes = [IsAuthenticated]
@@ -427,10 +570,11 @@ class AttendanceDetailAPIView(APIView):
         serializer = AttendanceSerializer(
             record,
             data=request.data,
+            partial=True,
             context={"request": request}
         )
         serializer.is_valid(raise_exception=True)
-        serializer.save()
+        serializer.save(marked_by=request.user)
         return Response(serializer.data)
 
     def delete(self, request, pk):
@@ -441,8 +585,9 @@ class AttendanceDetailAPIView(APIView):
 
         return Response(
             {"message": "Attendance soft deleted successfully."},
-            status=status.HTTP_204_NO_CONTENT
+            status=status.HTTP_200_OK
         )
+
 
 class EmployeeAttendanceHistoryAPIView(APIView):
     permission_classes = [IsAuthenticated]
@@ -460,23 +605,84 @@ class EmployeeAttendanceHistoryAPIView(APIView):
             records = Attendance.objects.filter(
                 employee=employee,
                 is_active=True
-            ).order_by('-date')
+            )
 
-            # 3️⃣ Optional date filtering
-            start_date = request.query_params.get('start_date')
-            end_date = request.query_params.get('end_date')
+            start_date = request.query_params.get("start_date")
+            end_date = request.query_params.get("end_date")
 
             if start_date and end_date:
-                records = records.filter(date__range=[start_date, end_date])
 
-            serializer = AttendanceSerializer(records, many=True)
+                records = records.filter(
+                    date__range=[start_date, end_date]
+                )
+
+            records = records.order_by("-date")
+
+            serializer = AttendanceSerializer(
+                records,
+                many=True
+            )
+
+            working_days = records.count()
+
+            present_days = records.filter(
+                status="present"
+            ).count()
+
+            absent_days = records.filter(
+                status="absent"
+            ).count()
+
+            half_days = records.filter(
+                status="half_day"
+            ).count()
+
+            leave_days = records.filter(
+                status="on_leave"
+            ).count()
+
+            attendance_percentage = 0
+
+            if working_days:
+
+                attendance_percentage = round(
+                    (
+                        present_days +
+                        (half_days * 0.5)
+                    ) / working_days * 100,
+                    2
+                )
 
             return Response({
+
                 "employee": {
+
                     "id": employee.id,
-                    "name": getattr(employee, 'name', 'N/A'),
+
+                    "name": employee.name,
+
+                    "employee_code": employee.employee_code
+
                 },
+
+                "summary": {
+
+                    "working_days": working_days,
+
+                    "present_days": present_days,
+
+                    "absent_days": absent_days,
+
+                    "half_days": half_days,
+
+                    "leave_days": leave_days,
+
+                    "attendance_percentage": attendance_percentage
+
+                },
+
                 "history": serializer.data
+
             })
 
         except Exception as e:
@@ -484,6 +690,7 @@ class EmployeeAttendanceHistoryAPIView(APIView):
                 {"error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
 
 class UserRoleMembersAPIView(RetrieveAPIView):
     """
@@ -1071,4 +1278,3 @@ class StaffAttendanceDashboardAPIView(APIView):
 
 
 
-        
